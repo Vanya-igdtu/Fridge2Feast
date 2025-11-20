@@ -1,3 +1,1 @@
-Dataset/
-runs/detect/
-venv/
+.env
