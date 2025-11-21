@@ -27,11 +27,6 @@ MAX_TOKENS = 1024
 MAX_ATTEMPTS = 5
 INITIAL_BACKOFF = 0.8
 
-# Default pantry (used when user does not supply one)
-DEFAULT_PANTRY: Set[str] = {
-    "salt", "pepper", "oil", "butter", "water", "sugar", "flour", "milk",
-    "vinegar", "garlic", "onion", "ginger", "soy sauce", "tomato paste"
-}
 
 # Ingredients sets for dietary rules (extend as needed)
 _ANIMAL_PRODUCTS = {
@@ -106,6 +101,7 @@ def extract_json_block(text: str) -> Optional[str]:
 
 def normalize_ingredients(items: List[str]) -> List[str]:
     """Normalize ingredient list: lowercase, strip, synonyms, dedupe preserving order."""
+    #This dictionary converts common mistakes or plurals to standard names.
     synonyms = {
         "eggs": "egg",
         "tomatoe": "tomato",
@@ -117,6 +113,7 @@ def normalize_ingredients(items: List[str]) -> List[str]:
     final: List[str] = []
     seen = set()
     for it in items:
+        #Skip anything that is not a string
         if not isinstance(it, str):
             continue
         s = it.strip().lower()
@@ -215,12 +212,33 @@ def build_prompt(ingredients: List[str], num: int, pantry_list: List[str], filte
         "The Base64 string decodes to a UTF-8 JSON array. Each element must be an object with: "
         "title (string), cook_minutes (int), servings (int), ingredients (array of strings), steps (array of strings). "
         "Allowed pantry items: " + pantry_text + ". "
-        "If impossible, return Base64 of []."
-        "if you get (veg and non-veg) or (vegan and non-veg)  as filters, generate 1 vegetarian recipe and 1 non-vegetarian recipe."
+        "You MUST always generate valid recipes using the allowed pantry items or reasonable substitutions; "
+        "You MUST NOT return an empty list under any circumstance. If some allowed ingredients are insufficient, invent reasonable common substitutions "
+        "(e.g., 'oil' for 'butter', 'water' or 'stock' for missing liquids, 'salt' if seasoning missing), but prefer items from the pantry. "
+        "Do not mention substitutions in the JSON. "
+        "If a filter requests BOTH (veg and non-veg) or (vegan and non-veg), you MUST generate EXACTLY 2 recipes: "
+        "one vegetarian (or vegan) and one non-vegetarian, regardless of the requested number of recipes. "
+        "Otherwise, follow these rules in order of priority: "
+        "1) Attempt to generate EXACTLY the number of recipes requested by the user. "
+        "2) If producing exactly that many valid, distinct recipes is impossible, produce as many valid recipes as you can up to that number, "
+        "but never fewer than 1. "
+        "3) When returning fewer than the requested number, prioritize recipe validity, ingredient availability, and recipe completeness. "
+        "The JSON must be valid and minimal with no commentary."
     )
-    # add filters_text to the user instruction to make model obey dietary constraints
-    user = f"Ingredients: [{allowed}]. Create up to {num} recipes using ONLY those ingredients + pantry. {filters_text} Return ONLY the Base64 string."
-    return [{"role": "system", "content": system}, {"role": "user", "content": user}]
+
+    user = (
+        f"Ingredients: [{allowed}]. Using ONLY these ingredients plus pantry items, "
+        f"generate UP TO {num} recipes, while attempting to produce exactly {num} recipes. "
+        f"If you cannot produce {num}, return as many valid recipes as possible (minimum 1). "
+        f"{filters_text} Return ONLY the Base64 string."
+    )
+
+    return [
+        {"role": "system", "content": system},
+        {"role": "user", "content": user}
+    ]
+
+
 
 
 # === Groq client ===
@@ -387,8 +405,8 @@ if __name__ == "__main__":
     #     print("Error (veg):", str(e))
 
     # Example: custom pantry + vegan + gluten-free
-    sample2 = ["mushroom", "rice", "tomato", "onion", "rice"]  # note: bread is usually gluten -> filter will ban it
-    # sample2 = ["mushroom", "jam", "tomato", "onion", "bread"]
+    # sample2 = ["mushroom", "rice", "tomato", "onion", "rice"]  # note: bread is usually gluten -> filter will ban it
+    sample2 = ["meet", "chicken", "Curry leaves", "Mustard seeds", "Ghee", "rice"]
     custom_pantry = ["salt", "pepper", "oil", "garlic"]
     try:
         recipes2 = gen.generate_recipes(sample2, num_recipes=3, user_pantry=custom_pantry, )
